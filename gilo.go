@@ -21,6 +21,18 @@ type editorConfig struct {
 
 var E editorConfig
 
+const (
+	ARROW_LEFT = iota + 1000
+	ARROW_RIGHT
+	ARROW_UP
+	ARROW_DOWN
+	DELETE_KEY
+	HOME_KEY
+	END_KEY
+	PAGE_UP
+	PAGE_DOWN
+)
+
 func CTRL_KEY(k byte) byte {
 	return k & 0x1f
 }
@@ -52,7 +64,7 @@ func disableRawMode() {
 	}
 }
 
-func editorReadKey() (byte, error) {
+func editorReadKey() (int, error) {
 	reader := bufio.NewReader(os.Stdin)
 	buffer := make([]byte, 1)
 	for n, err := reader.Read(buffer); n != 1; n, err = reader.Read(buffer) {
@@ -60,7 +72,64 @@ func editorReadKey() (byte, error) {
 			return 0, err
 		}
 	}
-	return buffer[0], nil
+
+	if buffer[0] == '\x1b' {
+		// check if we timeout so that we can just return an escape character
+		seq := make([]byte, 3)
+		_, err := reader.Read(seq)
+		if err != nil {
+			return '\x1b', err
+		}
+
+		if seq[0] == '[' {
+			if seq[1] >= '0' && seq[1] <= '9' {
+				if seq[2] == '~' {
+					switch seq[1] {
+					case '1':
+						return HOME_KEY, nil
+					case '3':
+						return DELETE_KEY, nil
+					case '4':
+						return END_KEY, nil
+					case '5':
+						return PAGE_UP, nil
+					case '6':
+						return PAGE_DOWN, nil
+					case '7':
+						return HOME_KEY, nil
+					case '8':
+						return END_KEY, nil
+					}
+				}
+			} else {
+				switch seq[1] {
+				case 'A':
+					return ARROW_UP, nil
+				case 'B':
+					return ARROW_DOWN, nil
+				case 'C':
+					return ARROW_RIGHT, nil
+				case 'D':
+					return ARROW_LEFT, nil
+				case 'H':
+					return HOME_KEY, nil
+				case 'F':
+					return END_KEY, nil
+				}
+			}
+		} else if seq[0] == 'O' {
+			switch seq[1] {
+			case 'H':
+				return HOME_KEY, nil
+			case 'F':
+				return END_KEY, nil
+			}
+		}
+
+		return '\x1b', nil
+	} else {
+		return int(buffer[0]), nil
+	}
 }
 
 func getWindowSize() (int, int, error) {
@@ -117,16 +186,24 @@ func editorRefreshScreen() {
 	ab.Reset()
 }
 
-func editorMoveCursor(key byte) {
+func editorMoveCursor(key int) {
 	switch key {
-	case 'h':
-		E.cx--
-	case 'j':
-		E.cy++
-	case 'k':
-		E.cy--
-	case 'l':
-		E.cx++
+	case ARROW_LEFT:
+		if E.cx != 0 {
+			E.cx--
+		}
+	case ARROW_DOWN:
+		if E.cy != E.screenrows-1 {
+			E.cy++
+		}
+	case ARROW_UP:
+		if E.cy != 0 {
+			E.cy--
+		}
+	case ARROW_RIGHT:
+		if E.cx != E.screencols-1 {
+			E.cx++
+		}
 	}
 }
 
@@ -135,14 +212,26 @@ func editorProcessKeypress() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("%d: %q\r\n", c, c)
+	// fmt.Printf("%d: %q\r\n", c, c)
 
 	switch c {
-	case CTRL_KEY('q'):
+	case int(CTRL_KEY('q')):
 		os.Stdout.Write([]byte("\x1b[2J"))
 		os.Stdout.Write([]byte("\x1b[H"))
 		os.Exit(0)
-	case 'h', 'j', 'k', 'l':
+	case PAGE_UP, PAGE_DOWN:
+		for times := E.screenrows; times > 0; times-- {
+			if c == PAGE_UP {
+				editorMoveCursor(ARROW_UP)
+			} else {
+				editorMoveCursor(ARROW_DOWN)
+			}
+		}
+	case HOME_KEY:
+		E.cx = 0
+	case END_KEY:
+		E.cx = E.screencols - 1
+	case ARROW_LEFT, ARROW_DOWN, ARROW_UP, ARROW_RIGHT:
 		editorMoveCursor(c)
 	}
 }
