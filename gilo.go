@@ -12,10 +12,17 @@ import (
 
 const KILO_VERSION string = "0.0.1"
 
+type erow struct {
+	size  int
+	chars []byte
+}
+
 type editorConfig struct {
 	cx, cy     int
 	screenrows int
 	screencols int
+	numrows    int
+	row        erow
 	oldState   unix.Termios
 }
 
@@ -141,31 +148,70 @@ func getWindowSize() (int, int, error) {
 	}
 }
 
-func editorDrawRows(ab *bytes.Buffer) {
-	for y := 0; y <= E.screenrows; y++ {
-		if y == E.screenrows/3 {
-			welcome := fmt.Sprintf("Gilo editor -- verion %s", KILO_VERSION)
-			welcomelen := len(welcome)
-			if welcomelen > E.screenrows {
-				welcomelen = E.screenrows
-			}
-			padding := (E.screencols - welcomelen) / 2
-			if padding != 0 {
-				ab.Write([]byte("~"))
-				padding--
-			}
-			for ; padding > 0; padding-- {
-				ab.Write([]byte(" "))
-			}
+func editorOpen(filename string) {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
 
-			ab.Write([]byte(welcome)[:welcomelen])
+	scanner := bufio.NewScanner(file)
+	var line []byte
+	var linelen int
+	// line := make([]byte, 1024)
+	// linelen, err := file.Read(line)
+	if scanner.Scan() {
+		line = scanner.Bytes()
+		linelen = len(line)
+	}
+
+	for linelen > 0 && (line[linelen-1] == '\n' || line[linelen-1] == '\r') {
+		linelen -= 1
+	}
+
+	E.row.size = linelen
+	E.row.chars = make([]byte, linelen+1)
+	copy(E.row.chars, line[:linelen])
+	E.row.chars[linelen] = '\000'
+	E.numrows = 1
+}
+
+func editorDrawRows(ab *bytes.Buffer) {
+	for y := 0; y < E.screenrows; y++ {
+		if y >= E.numrows {
+			if E.numrows == 0 && y == E.screenrows/3 {
+				welcome := fmt.Sprintf("Gilo editor -- verion %s", KILO_VERSION)
+				welcomelen := len(welcome)
+				if welcomelen > E.screenrows {
+					welcomelen = E.screenrows
+				}
+				padding := (E.screencols - welcomelen) / 2
+				if padding != 0 {
+					ab.Write([]byte("~"))
+					padding--
+				}
+				for ; padding > 0; padding-- {
+					ab.Write([]byte(" "))
+				}
+
+				ab.Write([]byte(welcome)[:welcomelen])
+			} else {
+				ab.Write([]byte("~"))
+			}
 		} else {
-			ab.Write([]byte("~"))
+			length := E.row.size
+			if length > E.screencols {
+				length = E.screencols
+			}
+			_, err := ab.Write(E.row.chars[:length])
+			if err != nil {
+				log.Fatal(err)
+			}
+			// fmt.Println(n)
 		}
 
 		ab.Write([]byte("\x1b[K"))
-
-		if y < E.screencols {
+		if y < E.screenrows-1 {
 			ab.Write([]byte("\r\n"))
 		}
 	}
@@ -182,7 +228,8 @@ func editorRefreshScreen() {
 	ab.Write([]byte("\x1b[?25h"))
 	ab.Write([]byte(fmt.Sprintf("\x1b[%d;%dH", E.cy+1, E.cx+1)))
 
-	os.Stdout.Write(ab.Bytes())
+	// os.Stdout.Write(ab.Bytes())
+	ab.WriteTo(os.Stdout)
 	ab.Reset()
 }
 
@@ -239,6 +286,8 @@ func editorProcessKeypress() {
 func initEditor() {
 	E.cx = 0
 	E.cy = 0
+	E.numrows = 0
+
 	cols, rows, err := getWindowSize()
 	if err != nil {
 		log.Fatal(err)
@@ -252,6 +301,11 @@ func main() {
 	defer disableRawMode()
 
 	initEditor()
+
+	args := os.Args[1:]
+	if len(args) > 0 {
+		editorOpen(args[0])
+	}
 
 	for {
 		editorRefreshScreen()
